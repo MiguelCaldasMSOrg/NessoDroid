@@ -25,12 +25,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v4.0.4
-        with:
-          accept-android-sdk-licenses: false
-          packages: ''
-      - name: Install Android SDK Packages
-        run: android --no-metrics --sdk="$ANDROID_HOME" sdk install platform-tools platforms/android-35 < /dev/null
       - uses: gradle/actions/setup-gradle@v6.3.0
       - name: Build, Test, and Lint
         run: bash ./gradlew assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --no-daemon

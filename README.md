@@ -90,7 +90,7 @@ For either transport, losing an acknowledgement does not prove the command was r
 
 Equivalent build, unit-test, and lint tasks are available in [VS Code tasks](.vscode/tasks.json). [GitHub Actions](.github/workflows/android.yml) runs the same checks and compiles the native test APK on pushes to `master` and pull requests. It does not start an emulator.
 
-CI uses the current setup-android action only to install command-line tools, then installs SDK packages with `android sdk install` instead of deprecated `sdkmanager` commands. It relies on the GitHub-hosted runner's preaccepted SDK licenses, disables CLI metrics, and runs noninteractively.
+CI uses the Android SDK and preaccepted licenses supplied by GitHub's `ubuntu-latest` runner. The Android Gradle Plugin downloads any missing SDK platforms and Build Tools required by the project; separate SDK setup and installation steps are unnecessary. A self-hosted runner must provide an SDK directory and accepted licenses first.
 
 Tests cover firmware status parsing, malformed telemetry, UTF-8 and MTU limits, legacy and Android 13 GATT APIs, connection/command deadlines, stale callbacks, coroutine cancellation, HTTP error/redirect/retry behavior, response bounds, ViewModel concurrency, and compact large-text Compose controls. They use JUnit, MockWebServer, Mockito, Robolectric, and coroutine test dispatchers; no physical board is needed for these tests.
 
