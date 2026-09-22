@@ -28,4 +28,4 @@ jobs:
       - uses: android-actions/setup-android@v4.0.4
       - uses: gradle/actions/setup-gradle@v6.3.0
       - name: Build, Test, and Lint
-        run: bash ./gradlew assembleDebug testDebugUnitTest lintDebug --no-daemon
+        run: bash ./gradlew assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --no-daemon

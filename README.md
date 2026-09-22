@@ -88,9 +88,25 @@ For either transport, losing an acknowledgement does not prove the command was r
 .\gradlew.bat assembleDebug testDebugUnitTest lintDebug
 ```
 
-Equivalent build, unit-test, and lint tasks are available in [VS Code tasks](.vscode/tasks.json). [GitHub Actions](.github/workflows/android.yml) runs the same checks on pushes to `master` and pull requests.
+Equivalent build, unit-test, and lint tasks are available in [VS Code tasks](.vscode/tasks.json). [GitHub Actions](.github/workflows/android.yml) runs the same checks and compiles the native test APK on pushes to `master` and pull requests. It does not start an emulator.
 
 Tests cover firmware status parsing, malformed telemetry, UTF-8 and MTU limits, legacy and Android 13 GATT APIs, connection/command deadlines, stale callbacks, coroutine cancellation, HTTP error/redirect/retry behavior, response bounds, ViewModel concurrency, and compact large-text Compose controls. They use JUnit, MockWebServer, Mockito, Robolectric, and coroutine test dispatchers; no physical board is needed for these tests.
+
+### Emulator Tests
+
+[MainActivityTest](app/src/androidTest/java/org/miguelcaldas/nessodroid/MainActivityTest.kt) exercises the installed app with an in-emulator HTTP stub, native Compose synchronization, and real Android permission dialogs. Android Test Orchestrator clears this app's data between tests to isolate permission state. Use a dedicated emulator, not a device holding app data you want to keep.
+
+With the test emulator running:
+
+```powershell
+$env:ANDROID_SERIAL = 'emulator-5556'
+.\gradlew.bat connectedDebugAndroidTest
+Remove-Item Env:ANDROID_SERIAL
+```
+
+On September 22, 2026, all 73 local tests and all 7 native tests passed on an Android 15/API 35 AVD approximating the Galaxy S24 Ultra display: 1440 x 3120 pixels at 505 dpi, capped at 2 CPU cores and 6144 MiB RAM. The native suite covers HTTP status, accepted and queue-full commands, disconnected BLE sending, activity recreation with the keyboard, landscape at 2x font scale, permission denial, and permission grant after rotation with scan cancellation.
+
+The native HTML report is generated under `app/build/reports/androidTests/connected/debug/`. The test runner may uninstall the app afterward; use `installDebug` to leave it available for manual testing.
 
 These tests do not replace testing on actual Android and Nesso hardware. Before a release, check permission denial and rotation, Bluetooth disabled/unavailable, scanning and reconnects, default and high-MTU links, maximum-length commands, queue-full responses, and Wi-Fi/BLE loss during a command. A Galaxy S24 Ultra-sized Android emulator can validate layout and Android behavior, but not Samsung One UI or a real BLE radio link.
 

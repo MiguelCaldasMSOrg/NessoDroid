@@ -14,6 +14,10 @@ orgJson = "20260814"
 mockito = "5.14.2"
 robolectric = "4.14.1"
 okhttp = "4.12.0"
+androidxTestRunner = "1.6.2"
+androidxTestJunit = "1.2.1"
+androidxUiAutomator = "2.3.0"
+androidxTestOrchestrator = "1.5.1"
 
 [libraries]
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidxCore" }
@@ -34,6 +38,10 @@ mockito-core = { group = "org.mockito", name = "mockito-core", version.ref = "mo
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
+androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "androidxUiAutomator" }
+androidx-test-orchestrator = { group = "androidx.test", name = "orchestrator", version.ref = "androidxTestOrchestrator" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
