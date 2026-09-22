@@ -33,4 +33,49 @@ class NessoStatusParserTest {
         assertNull(status.batteryVoltage)
         assertEquals("unavailable", status.batteryChargeState)
     }
+
+    @Test
+    fun missingOrInvalidNodeIsNotDeviceStatus() {
+        for (json in listOf("{}", """{"node":null}""", """{"node":" "}""", """{"node":42}""")) {
+            val result = runCatching { NessoStatusParser.parse(json) }
+
+            assertTrue(result.exceptionOrNull() is IllegalArgumentException)
+        }
+    }
+
+    @Test
+    fun malformedOptionalValuesStayNullInsteadOfBecomingZero() {
+        val status = NessoStatusParser.parse("""{"node":"Nesso-test","peer":42,"battery_percent":"unknown","battery_voltage":"unknown"}""")
+
+        assertNull(status.peer)
+        assertNull(status.batteryPercent)
+        assertNull(status.batteryVoltage)
+    }
+
+    @Test
+    fun invalidBatteryPercentagesStayNull() {
+        for (percent in listOf("-1", "101", "42.5", "12345678901234567890")) {
+            val status = NessoStatusParser.parse("""{"node":"Nesso-test","battery_percent":$percent}""")
+
+            assertNull(status.batteryPercent)
+        }
+    }
+
+    @Test
+    fun nonFiniteVoltageStaysNull() {
+        val status = NessoStatusParser.parse("""{"node":"Nesso-test","battery_voltage":1e999}""")
+
+        assertNull(status.batteryVoltage)
+    }
+
+    @Test
+    fun ignoresUnknownFieldsAndDefaultsMissingOptionalFields() {
+        val status = NessoStatusParser.parse("""{"node":"Nesso-test","future_field":{"enabled":true}}""")
+
+        assertEquals("Nesso-test", status.node)
+        assertEquals("unavailable", status.batteryState)
+        assertTrue(status.visualsEnabled)
+        assertEquals(60, status.visualTimeoutSeconds)
+        assertFalse(status.surveyActive)
+    }
 }

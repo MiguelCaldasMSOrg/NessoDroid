@@ -13,6 +13,9 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import androidx.annotation.MainThread
 import java.io.Closeable
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
@@ -26,7 +29,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class NessoBleDevice(
     val name: String,
@@ -43,6 +46,7 @@ enum class BleLinkState {
 }
 
 @SuppressLint("MissingPermission")
+@MainThread
 class BleNessoClient(
     context: Context,
     private val scope: CoroutineScope,
@@ -54,9 +58,11 @@ class BleNessoClient(
         private const val SCAN_DURATION_MS = 8000L
         private const val CONNECT_TIMEOUT_MS = 12000L
         private const val GATT_OPERATION_TIMEOUT_MS = 5000L
+        private const val COMMAND_TIMEOUT_MS = 30000L
     }
 
     private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
     private val adapter get() = bluetoothManager?.adapter
     private val operationMutex = Mutex()
@@ -77,11 +83,12 @@ class BleNessoClient(
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private var pendingWrite: CompletableDeferred<Unit>? = null
     private var pendingRead: CompletableDeferred<ByteArray>? = null
+    private var maxAttributeBytes = 20
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(callbackGatt: BluetoothGatt, status: Int, newState: Int) {
             if (callbackGatt !== gatt) {
-                callbackGatt.close()
+                runCatching { callbackGatt.close() }
                 return
             }
             if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -92,8 +99,12 @@ class BleNessoClient(
                 BluetoothProfile.STATE_CONNECTED -> {
                     _linkState.value = BleLinkState.DISCOVERING
                     _message.value = "Negotiating connection"
-                    if (!callbackGatt.requestMtu(517)) {
-                        callbackGatt.discoverServices()
+                    try {
+                        if (!callbackGatt.requestMtu(517)) {
+                            discoverServices(callbackGatt)
+                        }
+                    } catch (error: Exception) {
+                        failConnection(error.message ?: "Unable to negotiate BLE connection")
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> failConnection("Disconnected")
@@ -102,7 +113,12 @@ class BleNessoClient(
 
         override fun onMtuChanged(callbackGatt: BluetoothGatt, mtu: Int, status: Int) {
             if (callbackGatt === gatt) {
-                callbackGatt.discoverServices()
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    maxAttributeBytes = (mtu - 3).coerceIn(20, 512)
+                }
+                if (_linkState.value == BleLinkState.DISCOVERING) {
+                    discoverServices(callbackGatt)
+                }
             }
         }
 
@@ -113,11 +129,14 @@ class BleNessoClient(
             val service: BluetoothGattService? = callbackGatt.getService(SERVICE_UUID)
             commandCharacteristic = service?.getCharacteristic(COMMAND_UUID)
             statusCharacteristic = service?.getCharacteristic(STATUS_UUID)
-            if (status != BluetoothGatt.GATT_SUCCESS || commandCharacteristic == null || statusCharacteristic == null) {
+            val writable = ((commandCharacteristic?.properties ?: 0) and BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+            val readable = ((statusCharacteristic?.properties ?: 0) and BluetoothGattCharacteristic.PROPERTY_READ) != 0
+            if (status != BluetoothGatt.GATT_SUCCESS || !writable || !readable) {
                 failConnection("Nesso command service not found")
                 return
             }
             connectTimeoutJob?.cancel()
+            connectTimeoutJob = null
             _linkState.value = BleLinkState.CONNECTED
             _message.value = "Connected"
         }
@@ -134,6 +153,7 @@ class BleNessoClient(
         }
 
         @Deprecated("Used on Android 12 and earlier")
+        @Suppress("DEPRECATION")
         override fun onCharacteristicRead(callbackGatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             completeRead(callbackGatt, characteristic, characteristic.value ?: byteArrayOf(), status)
         }
@@ -144,27 +164,40 @@ class BleNessoClient(
     }
 
     fun startScan() {
+        check(_linkState.value == BleLinkState.DISCONNECTED) { "Disconnect before scanning" }
         stopScan()
         val scanner = adapter?.bluetoothLeScanner ?: throw IllegalStateException("Bluetooth is disabled or unavailable")
         _devices.value = emptyList()
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
-                addScanResult(result)
+                if (scanCallback === this) {
+                    addScanResult(result)
+                }
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
-                results.forEach(::addScanResult)
+                if (scanCallback === this) {
+                    results.forEach(::addScanResult)
+                }
             }
 
             override fun onScanFailed(errorCode: Int) {
-                _scanning.value = false
-                _message.value = "BLE scan failed ($errorCode)"
+                if (scanCallback === this) {
+                    stopScan()
+                    _message.value = "BLE scan failed ($errorCode)"
+                }
             }
         }
         scanCallback = callback
         _scanning.value = true
         _message.value = "Scanning for Nesso devices"
-        scanner.startScan(callback)
+        try {
+            scanner.startScan(callback)
+        } catch (error: Exception) {
+            stopScan()
+            _message.value = error.message ?: "Unable to start BLE scan"
+            throw error
+        }
         scanJob = scope.launch {
             delay(SCAN_DURATION_MS)
             stopScan()
@@ -189,39 +222,63 @@ class BleNessoClient(
         disconnect()
         _linkState.value = BleLinkState.CONNECTING
         _message.value = "Connecting to ${device.name}"
-        gatt = device.device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-        connectTimeoutJob = scope.launch {
-            delay(CONNECT_TIMEOUT_MS)
-            if (_linkState.value != BleLinkState.CONNECTED) {
-                failConnection("Connection timed out")
+        try {
+            gatt = checkNotNull(device.device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE, BluetoothDevice.PHY_LE_1M_MASK, mainHandler)) { "Unable to start BLE connection" }
+            connectTimeoutJob = scope.launch {
+                delay(CONNECT_TIMEOUT_MS)
+                if (_linkState.value != BleLinkState.CONNECTED) {
+                    failConnection("Connection timed out")
+                }
             }
+        } catch (error: Exception) {
+            failConnection(error.message ?: "Unable to start BLE connection")
+            throw error
         }
     }
 
     fun disconnect() {
-        connectTimeoutJob?.cancel()
-        connectTimeoutJob = null
-        failPending(IllegalStateException("Disconnected"))
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
-        commandCharacteristic = null
-        statusCharacteristic = null
-        _linkState.value = BleLinkState.DISCONNECTED
-        _message.value = "Not connected"
+        failConnection("Not connected")
     }
 
-    suspend fun sendCommand(command: String): String = operationMutex.withLock {
-        check(_linkState.value == BleLinkState.CONNECTED) { "Connect to a Nesso device first" }
-        var response = ""
-        for (frame in BleCommandFramer.frames(command)) {
-            writeFrame(frame)
-            response = readIngressStatusInternal()
-            if (response.isIngressError()) {
-                break
+    suspend fun sendCommand(command: String): String = withTimeoutOrNull(COMMAND_TIMEOUT_MS) {
+        operationMutex.withLock {
+            check(_linkState.value == BleLinkState.CONNECTED) { "Connect to a Nesso device first" }
+            val currentGatt = gatt
+            val frames = BleCommandFramer.frames(command, maxAttributeBytes)
+            val commandBytes = command.toByteArray(Charsets.UTF_8).size
+            try {
+                var response = ""
+                var sentBytes = 0
+                for ((index, frame) in frames.withIndex()) {
+                    check(gatt === currentGatt) { "BLE connection changed during command" }
+                    writeFrame(frame)
+                    response = readIngressStatusInternal()
+                    if (index < frames.lastIndex) {
+                        val expected = if (index == 0) {
+                            "chunk_ready"
+                        } else {
+                            sentBytes += frame.size - 6
+                            "chunk:$sentBytes/$commandBytes"
+                        }
+                        check(response == expected) { "Unexpected BLE chunk response: $response" }
+                    }
+                }
+                response
+            } catch (error: Exception) {
+                if (gatt === currentGatt) {
+                    failConnection("Command interrupted; reconnect before retrying")
+                }
+                throw error
             }
         }
-        response
+    } ?: throw IllegalStateException("BLE command timed out; reconnect before retrying")
+
+    private fun discoverServices(currentGatt: BluetoothGatt) {
+        try {
+            check(currentGatt.discoverServices()) { "Unable to start BLE service discovery" }
+        } catch (error: Exception) {
+            failConnection(error.message ?: "BLE service discovery failed")
+        }
     }
 
     private fun addScanResult(result: ScanResult) {
@@ -235,28 +292,28 @@ class BleNessoClient(
         }
     }
 
+    @Suppress("DEPRECATION")
     private suspend fun writeFrame(value: ByteArray) {
         val currentGatt = checkNotNull(gatt) { "Not connected" }
         val characteristic = checkNotNull(commandCharacteristic) { "Command characteristic unavailable" }
         val completion = CompletableDeferred<Unit>()
         pendingWrite = completion
-        val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            currentGatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
-        } else {
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            characteristic.value = value
-            currentGatt.writeCharacteristic(characteristic)
-        }
-        if (!started) {
-            pendingWrite = null
-            throw IllegalStateException("Unable to start BLE write")
-        }
         try {
-            withTimeout(GATT_OPERATION_TIMEOUT_MS) {
-                completion.await()
+            val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                currentGatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS
+            } else {
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                characteristic.value = value
+                currentGatt.writeCharacteristic(characteristic)
             }
+            check(started) { "Unable to start BLE write" }
+            checkNotNull(withTimeoutOrNull(GATT_OPERATION_TIMEOUT_MS) {
+                completion.await()
+            }) { "BLE write timed out; reconnect before retrying" }
         } finally {
-            pendingWrite = null
+            if (pendingWrite === completion) {
+                pendingWrite = null
+            }
         }
     }
 
@@ -265,16 +322,15 @@ class BleNessoClient(
         val characteristic = checkNotNull(statusCharacteristic) { "Status characteristic unavailable" }
         val completion = CompletableDeferred<ByteArray>()
         pendingRead = completion
-        if (!currentGatt.readCharacteristic(characteristic)) {
-            pendingRead = null
-            throw IllegalStateException("Unable to start BLE status read")
-        }
         return try {
-            withTimeout(GATT_OPERATION_TIMEOUT_MS) {
-                completion.await().toString(Charsets.UTF_8)
-            }
+            check(currentGatt.readCharacteristic(characteristic)) { "Unable to start BLE status read" }
+            checkNotNull(withTimeoutOrNull(GATT_OPERATION_TIMEOUT_MS) {
+                completion.await()
+            }) { "BLE status read timed out; reconnect before retrying" }.toString(Charsets.UTF_8)
         } finally {
-            pendingRead = null
+            if (pendingRead === completion) {
+                pendingRead = null
+            }
         }
     }
 
@@ -294,12 +350,15 @@ class BleNessoClient(
         connectTimeoutJob?.cancel()
         connectTimeoutJob = null
         failPending(IllegalStateException(reason))
-        gatt?.close()
+        val currentGatt = gatt
         gatt = null
         commandCharacteristic = null
         statusCharacteristic = null
+        maxAttributeBytes = 20
         _linkState.value = BleLinkState.DISCONNECTED
         _message.value = reason
+        runCatching { currentGatt?.disconnect() }
+        runCatching { currentGatt?.close() }
     }
 
     private fun failPending(error: Throwable) {
@@ -307,10 +366,6 @@ class BleNessoClient(
         pendingRead?.completeExceptionally(error)
         pendingWrite = null
         pendingRead = null
-    }
-
-    private fun String.isIngressError(): Boolean {
-        return startsWith("invalid_") || startsWith("no_chunk_") || startsWith("chunk_too_") || startsWith("length_") || this == "empty" || this == "too_long" || this == "full"
     }
 
     override fun close() {

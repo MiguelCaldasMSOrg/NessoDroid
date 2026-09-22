@@ -1,11 +1,12 @@
 package org.miguelcaldas.nessodroid.ui
 
 import android.app.Application
+import androidx.annotation.MainThread
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,10 +44,10 @@ data class NessoUiState(
     val activity: List<ActivityEntry> = emptyList(),
 )
 
-class NessoViewModel(application: Application) : AndroidViewModel(application) {
-    private val httpClient = HttpNessoClient()
-    private val bleClient = BleNessoClient(application, viewModelScope)
-    private val sequence = AtomicLong()
+@MainThread
+class NessoViewModel @JvmOverloads constructor(application: Application, private val httpClient: HttpNessoClient = HttpNessoClient(), providedBleClient: BleNessoClient? = null) : AndroidViewModel(application) {
+    private val bleClient = providedBleClient ?: BleNessoClient(application, viewModelScope)
+    private var sequence = 0L
     private val timestamp = DateTimeFormatter.ofPattern("HH:mm:ss")
     private val _uiState = MutableStateFlow(NessoUiState())
     val uiState: StateFlow<NessoUiState> = _uiState.asStateFlow()
@@ -75,11 +76,16 @@ class NessoViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectTransport(transport: TransportMode) {
+        if (transport != TransportMode.BLE) {
+            bleClient.stopScan()
+        }
         _uiState.update { it.copy(transport = transport) }
     }
 
     fun setHttpEndpoint(endpoint: String) {
-        _uiState.update { it.copy(httpEndpoint = endpoint) }
+        _uiState.update { state ->
+            if (state.httpEndpoint == endpoint) state else state.copy(httpEndpoint = endpoint, httpStatus = null)
+        }
     }
 
     fun setCommand(command: String) {
@@ -88,15 +94,11 @@ class NessoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshHttpStatus() {
         val endpoint = _uiState.value.httpEndpoint
-        viewModelScope.launch {
-            _uiState.update { it.copy(busy = true) }
-            runCatching { httpClient.readStatus(endpoint) }
-                .onSuccess { status ->
-                    _uiState.update { it.copy(httpStatus = status) }
-                    addActivity("HTTP", "Status received from ${status.node}")
-                }
-                .onFailure { error -> addActivity("HTTP", error.userMessage(), true) }
-            _uiState.update { it.copy(busy = false) }
+        launchOperation("HTTP") {
+            updateHttpStatus(endpoint, null)
+            val status = httpClient.readStatus(endpoint)
+            updateHttpStatus(endpoint, status)
+            addActivity("HTTP", "Status received from ${status.node}")
         }
     }
 
@@ -122,18 +124,19 @@ class NessoViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendCommand() {
         val state = _uiState.value
+        if (state.busy) {
+            return
+        }
         val command = state.command.trim()
         if (command.isEmpty()) {
             addActivity(state.transport.name, "Enter a command first", true)
             return
         }
-        viewModelScope.launch {
-            _uiState.update { it.copy(busy = true) }
+        launchOperation(state.transport.name) {
             when (state.transport) {
-                TransportMode.HTTP -> sendHttpCommand(state.httpEndpoint, command)
-                TransportMode.BLE -> sendBleCommand(command)
+                TransportMode.HTTP -> sendHttpCommand(state.httpEndpoint, command, state.command)
+                TransportMode.BLE -> sendBleCommand(command, state.command)
             }
-            _uiState.update { it.copy(busy = false) }
         }
     }
 
@@ -145,33 +148,64 @@ class NessoViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(activity = emptyList()) }
     }
 
-    private suspend fun sendHttpCommand(endpoint: String, command: String) {
-        runCatching { httpClient.sendCommand(endpoint, command) }
-            .onSuccess { response ->
-                addActivity("HTTP", "$command -> ${response.status}", !response.accepted)
-                if (response.accepted) {
-                    _uiState.update { it.copy(command = "") }
-                    runCatching { httpClient.readStatus(endpoint) }
-                        .onSuccess { status -> _uiState.update { it.copy(httpStatus = status) } }
-                        .onFailure { error -> addActivity("HTTP", "Command accepted; status refresh failed: ${error.userMessage()}", true) }
-                }
+    private fun launchOperation(source: String, operation: suspend () -> Unit) {
+        if (_uiState.value.busy) {
+            return
+        }
+        _uiState.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                operation()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                addActivity(source, error.userMessage(), true)
+            } finally {
+                _uiState.update { it.copy(busy = false) }
             }
-            .onFailure { error -> addActivity("HTTP", error.userMessage(), true) }
+        }
     }
 
-    private suspend fun sendBleCommand(command: String) {
-        runCatching { bleClient.sendCommand(command) }
-            .onSuccess { response ->
-                addActivity("BLE", "$command -> $response", response.isIngressFailure())
-                if (!response.isIngressFailure()) {
-                    _uiState.update { it.copy(command = "") }
+    private suspend fun sendHttpCommand(endpoint: String, command: String, draft: String) {
+        val response = httpClient.sendCommand(endpoint, command)
+        addActivity("HTTP", "$command -> ${response.status}", !response.accepted)
+        if (response.accepted) {
+            clearSubmittedCommand(draft)
+            if (_uiState.value.httpEndpoint == endpoint) {
+                updateHttpStatus(endpoint, null)
+                try {
+                    updateHttpStatus(endpoint, httpClient.readStatus(endpoint))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    addActivity("HTTP", "Command accepted; status refresh failed: ${error.userMessage()}", true)
                 }
             }
-            .onFailure { error -> addActivity("BLE", error.userMessage(), true) }
+        }
+    }
+
+    private suspend fun sendBleCommand(command: String, draft: String) {
+        val response = bleClient.sendCommand(command)
+        addActivity("BLE", "$command -> $response", response != "queued")
+        if (response == "queued") {
+            clearSubmittedCommand(draft)
+        }
+    }
+
+    private fun updateHttpStatus(endpoint: String, status: NessoStatus?) {
+        _uiState.update { state ->
+            if (state.httpEndpoint == endpoint) state.copy(httpStatus = status) else state
+        }
+    }
+
+    private fun clearSubmittedCommand(draft: String) {
+        _uiState.update { state ->
+            if (state.command == draft) state.copy(command = "") else state
+        }
     }
 
     private fun addActivity(source: String, message: String, error: Boolean = false) {
-        val entry = ActivityEntry(sequence.incrementAndGet(), LocalTime.now().format(timestamp), source, message, error)
+        val entry = ActivityEntry(++sequence, LocalTime.now().format(timestamp), source, message, error)
         _uiState.update { state ->
             state.copy(activity = (listOf(entry) + state.activity).take(100))
         }
@@ -179,10 +213,6 @@ class NessoViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun Throwable.userMessage(): String {
         return message?.takeIf { it.isNotBlank() } ?: javaClass.simpleName
-    }
-
-    private fun String.isIngressFailure(): Boolean {
-        return startsWith("invalid_") || startsWith("no_chunk_") || startsWith("chunk_too_") || startsWith("length_") || this == "empty" || this == "too_long" || this == "full"
     }
 
     override fun onCleared() {

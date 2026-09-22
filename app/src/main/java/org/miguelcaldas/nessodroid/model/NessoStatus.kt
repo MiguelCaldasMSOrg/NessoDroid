@@ -27,8 +27,9 @@ data class NessoStatus(
 object NessoStatusParser {
     fun parse(json: String): NessoStatus {
         val value = JSONObject(json)
+        val node = requireNotNull(value.stringOrNull("node")) { "Status response is missing a valid node" }
         return NessoStatus(
-            node = value.optString("node"),
+            node = node,
             mode = value.optString("mode"),
             profile = value.optString("profile"),
             peer = value.stringOrNull("peer"),
@@ -42,7 +43,7 @@ object NessoStatusParser {
             surveyActive = value.optBoolean("survey_active"),
             queuedCommands = value.optInt("queued_commands"),
             batteryState = value.optString("battery_state", "unavailable"),
-            batteryPercent = value.intOrNull("battery_percent"),
+            batteryPercent = value.intOrNull("battery_percent")?.takeIf { it in 0..100 },
             batteryVoltage = value.doubleOrNull("battery_voltage"),
             batteryChargeState = value.optString("battery_charge_state", "unavailable"),
             visualsEnabled = value.optBoolean("visuals_enabled", true),
@@ -51,17 +52,15 @@ object NessoStatusParser {
     }
 
     private fun JSONObject.stringOrNull(name: String): String? {
-        if (!has(name) || isNull(name)) {
-            return null
-        }
-        return optString(name).takeIf { it.isNotBlank() }
+        return (opt(name) as? String)?.takeIf { it.isNotBlank() }
     }
 
     private fun JSONObject.intOrNull(name: String): Int? {
-        return if (!has(name) || isNull(name)) null else optInt(name)
+        val number = (opt(name) as? Number)?.toDouble() ?: return null
+        return number.takeIf { it.isFinite() && it in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble() && it % 1.0 == 0.0 }?.toInt()
     }
 
     private fun JSONObject.doubleOrNull(name: String): Double? {
-        return if (!has(name) || isNull(name)) null else optDouble(name)
+        return (opt(name) as? Number)?.toDouble()?.takeIf { it.isFinite() }
     }
 }
