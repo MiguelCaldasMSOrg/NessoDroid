@@ -25,4 +25,6 @@
 - BLE command responses are ingress/queue statuses, not the firmware serial output stream.
 - Preserve API 35, minimum API 26, and Java/Kotlin 17 unless a migration is explicitly requested.
 - Use `master` as the default branch.
+- Keep production keystores and credentials outside the repository; never print signing secret values in logs.
+- Verify production APK signatures with `apksigner` before publication.
 - Run `assembleDebug`, `testDebugUnitTest`, and `lintDebug` before committing transport or UI changes.

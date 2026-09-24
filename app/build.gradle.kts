@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+val releaseKeystorePath = providers.gradleProperty("RELEASE_KEYSTORE_PATH").orElse(providers.environmentVariable("RELEASE_KEYSTORE_PATH"))
+val releaseKeystorePassword = providers.gradleProperty("RELEASE_KEYSTORE_PASSWORD").orElse(providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD"))
+val releaseKeyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").orElse(providers.environmentVariable("RELEASE_KEY_ALIAS"))
+val releaseKeyPassword = providers.gradleProperty("RELEASE_KEY_PASSWORD").orElse(providers.environmentVariable("RELEASE_KEY_PASSWORD"))
+
 android {
     namespace = "org.miguelcaldas.nessodroid"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -17,8 +22,18 @@ android {
         testInstrumentationRunnerArguments["clearPackageData"] = "true"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = releaseKeystorePath.orNull?.takeIf { it.isNotBlank() }?.let { rootProject.file(it) }
+            storePassword = releaseKeystorePassword.orNull
+            keyAlias = releaseKeyAlias.orNull
+            keyPassword = releaseKeyPassword.orNull
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -80,4 +95,24 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestUtil(libs.androidx.test.orchestrator)
+}
+
+val validateReleaseSigning by tasks.registering {
+    group = "verification"
+    description = "Validates production signing credentials before a release build."
+    doLast {
+        val missing = mapOf(
+            "RELEASE_KEYSTORE_PATH" to releaseKeystorePath.orNull,
+            "RELEASE_KEYSTORE_PASSWORD" to releaseKeystorePassword.orNull,
+            "RELEASE_KEY_ALIAS" to releaseKeyAlias.orNull,
+            "RELEASE_KEY_PASSWORD" to releaseKeyPassword.orNull,
+        ).filterValues { it.isNullOrBlank() }.keys
+        check(missing.isEmpty()) { "Missing release signing values: ${missing.joinToString()}" }
+        val keystore = rootProject.file(releaseKeystorePath.get())
+        check(keystore.isFile) { "Release keystore does not exist: $keystore" }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseSigning)
 }

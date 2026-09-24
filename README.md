@@ -32,7 +32,37 @@ With an Android device or emulator connected through ADB:
 adb shell am start -n org.miguelcaldas.nessodroid/.MainActivity
 ```
 
-On macOS/Linux, run `bash ./gradlew` in place of `.\gradlew.bat`. Release signing and distribution are not configured; the debug APK is for development and laboratory use.
+On macOS/Linux, run `bash ./gradlew` in place of `.\gradlew.bat`. The debug APK is for development and laboratory use.
+
+## Signed Releases
+
+Installable APKs from tagged signed builds and their SHA-256 checksums are published under [GitHub Releases](https://github.com/MiguelCaldasMSOrg/NessoDroid/releases). Release builds use a stable signing certificate and are not debuggable. An installed debug build uses a different certificate and must be uninstalled before installing a release APK; uninstalling clears its app data.
+
+Signing credentials stay outside the repository. For local builds, configure these Gradle properties in your user-level Gradle configuration or provide environment variables with the same names:
+
+- `RELEASE_KEYSTORE_PATH`: absolute path to the existing private keystore
+- `RELEASE_KEYSTORE_PASSWORD`: keystore password
+- `RELEASE_KEY_ALIAS`: signing key alias
+- `RELEASE_KEY_PASSWORD`: signing key password
+
+```powershell
+.\gradlew.bat assembleRelease testDebugUnitTest lintRelease --no-configuration-cache
+```
+
+The signed APK is generated at `app/build/outputs/apk/release/app-release.apk`. Verify its signature with the Android SDK's `apksigner verify --verbose --print-certs` command before publication. Keep the keystore and credentials backed up securely: subsequent releases must retain the same signing identity to update existing installations. Never commit credentials or publish the keystore as a release asset.
+
+### GitHub Actions signing
+
+The `Signed Android Release` workflow uses these encrypted repository secrets:
+
+- `RELEASE_KEYSTORE_BASE64`: base64 encoding of the complete binary keystore
+- `RELEASE_KEYSTORE_PASSWORD`: keystore password
+- `RELEASE_KEY_ALIAS`: signing key alias
+- `RELEASE_KEY_PASSWORD`: signing key password
+
+The workflow decodes the keystore into the runner's temporary directory, builds the release APK, verifies its certificate with `apksigner`, generates a SHA-256 checksum, uploads both as a 30-day workflow artifact, and removes the temporary keystore. A manual workflow run builds an artifact without creating a GitHub Release. Pushing a `v*` tag also creates or updates the corresponding GitHub Release.
+
+GitHub encrypted secrets are limited to 48 KB each, so the base64 keystore must fit that limit. Set secrets through `gh secret set` or the repository's Actions settings; never place their values in commands that enter shell history, issue comments, workflow files, or chat.
 
 ## Controller
 

@@ -26,6 +26,13 @@
             "command": ".\\gradlew.bat",
             "args": ["lintDebug"],
             "problemMatcher": ["$gradle"]
+        },
+        {
+            "label": "Android: Build Signed Release APK",
+            "type": "shell",
+            "command": ".\\gradlew.bat",
+            "args": ["assembleRelease", "lintRelease", "--no-configuration-cache"],
+            "problemMatcher": ["$gradle"]
         }
     ]
 }
