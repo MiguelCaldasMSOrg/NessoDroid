@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -99,6 +100,30 @@ class MainActivityTest {
         show("Send")
         compose.onNodeWithText("Send").assertIsEnabled()
         capture("http-queue-full")
+    }
+
+    @Test
+    fun deviceAndActivityViewsSurviveRecreation() {
+        server.enqueue(MockResponse().setBody(statusJson))
+        click("Refresh")
+        awaitText("S24-TEST")
+        compose.onNodeWithTag("page-device").performClick()
+        compose.onNodeWithText("HTTP telemetry").assertIsDisplayed()
+        capture("device-overview")
+        show("charging")
+        compose.onNodeWithText("charging").assertIsDisplayed()
+        capture("device-power")
+        compose.onNodeWithTag("page-activity").performClick()
+        show("Status received from S24-TEST")
+        compose.onNodeWithText("Status received from S24-TEST").assertIsDisplayed()
+        compose.activityRule.scenario.recreate()
+        compose.onNodeWithText("Responses").assertIsDisplayed()
+        capture("activity-history")
+        click("Clear activity")
+        awaitText("No responses yet")
+        compose.onNodeWithTag("page-control").performClick()
+        show("Send")
+        compose.onNodeWithText("Send").assertIsNotEnabled()
     }
 
     @Test
@@ -199,11 +224,11 @@ class MainActivityTest {
 
     private fun click(text: String) {
         show(text)
-        compose.onNodeWithText(text).performClick()
+        compose.onNode(hasText(text) or hasContentDescription(text)).performClick()
     }
 
     private fun show(text: String) {
-        compose.onNodeWithTag("controller").performScrollToNode(hasText(text))
+        compose.onNodeWithTag("controller").performScrollToNode(hasText(text) or hasContentDescription(text))
     }
 
     private fun awaitText(text: String) {

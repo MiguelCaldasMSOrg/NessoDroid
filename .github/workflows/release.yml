@@ -1,5 +1,8 @@
 name: Signed Android Release
 
+# Build requirements: four encrypted repository secrets, JDK 25, the checked-in
+# Gradle wrapper, and Android SDK/Build Tools from the GitHub Ubuntu runner.
+
 on:
   workflow_dispatch:
   push:
@@ -28,7 +31,7 @@ jobs:
       - uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
       - uses: gradle/actions/setup-gradle@v6.3.0
       - name: Decode production keystore
         env:
@@ -39,6 +42,8 @@ jobs:
           : "${RELEASE_KEYSTORE_PASSWORD:?Missing RELEASE_KEYSTORE_PASSWORD repository secret}"
           : "${RELEASE_KEY_ALIAS:?Missing RELEASE_KEY_ALIAS repository secret}"
           : "${RELEASE_KEY_PASSWORD:?Missing RELEASE_KEY_PASSWORD repository secret}"
+          # Keep private key bytes in runner-temporary storage. Only the path is
+          # passed to later Gradle steps; the base64 value is never written to logs.
           keystore_path="$RUNNER_TEMP/nessodroid-release.keystore"
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
           test -s "$keystore_path"
@@ -77,4 +82,5 @@ jobs:
           fi
       - name: Remove temporary keystore
         if: always()
+        # Cleanup runs after success, failure, or cancellation.
         run: rm -f "$RELEASE_KEYSTORE_PATH"

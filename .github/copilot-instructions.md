@@ -5,7 +5,7 @@
 - [x] Clarify requirements
   Native Kotlin/Compose Android controller with HTTP and BLE transports, package `org.miguelcaldas.nessodroid`, API 35, minimum API 26, Java 17, tests, documentation, GitHub, and a dedicated VS Code workspace.
 - [x] Scaffold project
-  Gradle Kotlin DSL, Gradle 9.5 wrapper, Android resources, manifest, and Compose entry point are present. Project evaluation passes under JDK 21.
+  Gradle Kotlin DSL, Gradle 9.5 wrapper, Android resources, manifest, and Compose entry point are present. The Gradle daemon and both CI workflows use JDK 25.
 - [x] Customize project
   HTTP command/status transport, bounded BLE GATT transport, long-command framing, ViewModel state, permission flow, controller UI, activity log, and tests are implemented.
 - [x] Install required extensions
@@ -24,6 +24,7 @@
 - Keep HTTP and BLE operations asynchronous and deadline-bounded; never block the Android main thread.
 - BLE command responses are ingress/queue statuses, not the firmware serial output stream.
 - Preserve API 35, minimum API 26, and Java/Kotlin 17 unless a migration is explicitly requested.
+- Use JDK 25 for the build host; the Gradle daemon version is pinned in `gradle/gradle-daemon-jvm.properties`.
 - Use `master` as the default branch.
 - Keep production keystores and credentials outside the repository; never print signing secret values in logs.
 - Verify production APK signatures with `apksigner` before publication.

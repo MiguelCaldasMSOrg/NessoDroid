@@ -3,6 +3,10 @@ plugins {
     alias(libs.plugins.compose.compiler)
 }
 
+// Build host: Gradle 9.5 and AGP 9.3.2 run under the pinned JDK 25. The
+// application itself emits Java/Kotlin 17 bytecode and compiles against API 35.
+// Release values resolve from user Gradle properties first, then environment
+// variables with the same names. CI decodes base64 separately and supplies a path.
 val releaseKeystorePath = providers.gradleProperty("RELEASE_KEYSTORE_PATH").orElse(providers.environmentVariable("RELEASE_KEYSTORE_PATH"))
 val releaseKeystorePassword = providers.gradleProperty("RELEASE_KEYSTORE_PASSWORD").orElse(providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD"))
 val releaseKeyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").orElse(providers.environmentVariable("RELEASE_KEY_ALIAS"))
@@ -23,6 +27,8 @@ android {
     }
 
     signingConfigs {
+        // Debug builds retain Android's standard debug signing. Only release
+        // builds use this stable production identity and its external secrets.
         create("release") {
             storeFile = releaseKeystorePath.orNull?.takeIf { it.isNotBlank() }?.let { rootProject.file(it) }
             storePassword = releaseKeystorePassword.orNull
@@ -74,6 +80,7 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.icons)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.kotlinx.coroutines.android)
@@ -97,6 +104,8 @@ dependencies {
     androidTestUtil(libs.androidx.test.orchestrator)
 }
 
+// Fail release builds before packaging rather than emitting an unsigned or
+// ambiguously configured artifact. Debug and test builds do not depend on this task.
 val validateReleaseSigning by tasks.registering {
     group = "verification"
     description = "Validates production signing credentials before a release build."

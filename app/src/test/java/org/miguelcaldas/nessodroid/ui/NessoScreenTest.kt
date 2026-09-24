@@ -7,9 +7,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
@@ -55,8 +57,8 @@ class NessoScreenTest {
         var cancellations = 0
         render(NessoUiState(transport = TransportMode.BLE, bleLinkState = BleLinkState.CONNECTING), onDisconnect = { cancellations++ })
 
-        compose.onNodeWithTag("controller").performScrollToNode(hasText("Cancel"))
-        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithTag("controller").performScrollToNode(hasContentDescription("Cancel"))
+        compose.onNodeWithContentDescription("Cancel").performClick()
 
         assertEquals(1, cancellations)
     }
@@ -74,11 +76,38 @@ class NessoScreenTest {
         assertEquals(0, sends)
     }
 
-    private fun render(state: NessoUiState, fontScale: Float = 1f, onDisconnect: () -> Unit = {}, onCommandChanged: (String) -> Unit = {}, onSend: () -> Unit = {}) {
+    @Test
+    fun detailedTelemetryHasItsOwnView() {
+        val status = NessoStatusParser.parse("""{"node":"Nesso-test","mode":"LoRa","profile":"maximum-range","peer":"peer-42","wifi_address":"192.168.1.12"}""")
+        render(NessoUiState(httpStatus = status))
+
+        compose.onNodeWithTag("page-device").performClick()
+        compose.onNodeWithTag("controller").performScrollToNode(hasText("peer-42"))
+        compose.onNodeWithText("peer-42").assertIsDisplayed()
+        compose.onNodeWithTag("page-control").performClick()
+        compose.onNodeWithTag("controller").performScrollToNode(hasText("Send"))
+        compose.onNodeWithText("Send").assertIsDisplayed()
+    }
+
+    @Test
+    fun activityViewShowsHistoryAndCanClearIt() {
+        var cleared = false
+        render(NessoUiState(activity = listOf(ActivityEntry(1, "12:34:56", "HTTP", "p -> queued"))), onClear = { cleared = true })
+
+        compose.onNodeWithTag("page-activity").performClick()
+        compose.onNodeWithTag("controller").performScrollToNode(hasText("p -> queued"))
+        compose.onNodeWithText("p -> queued").assertIsDisplayed()
+        compose.onNodeWithTag("controller").performScrollToNode(hasContentDescription("Clear activity"))
+        compose.onNodeWithContentDescription("Clear activity").performClick()
+
+        assertEquals(true, cleared)
+    }
+
+    private fun render(state: NessoUiState, fontScale: Float = 1f, onDisconnect: () -> Unit = {}, onCommandChanged: (String) -> Unit = {}, onSend: () -> Unit = {}, onClear: () -> Unit = {}) {
         compose.setContent {
             CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
                 NessoTheme {
-                    NessoScreen(state = state, onTransportSelected = {}, onHttpEndpointChanged = {}, onRefreshHttpStatus = {}, onStartBleScan = {}, onStopBleScan = {}, onConnectBle = {}, onDisconnectBle = onDisconnect, onCommandChanged = onCommandChanged, onSendCommand = onSend, onClearLog = {}, modifier = Modifier.requiredSize(320.dp, 280.dp))
+                    NessoScreen(state = state, onTransportSelected = {}, onHttpEndpointChanged = {}, onRefreshHttpStatus = {}, onStartBleScan = {}, onStopBleScan = {}, onConnectBle = {}, onDisconnectBle = onDisconnect, onCommandChanged = onCommandChanged, onSendCommand = onSend, onClearLog = onClear, modifier = Modifier.requiredSize(320.dp, 280.dp))
                 }
             }
         }
