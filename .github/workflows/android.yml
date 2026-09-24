@@ -5,16 +5,24 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      java_version:
+        description: JDK used for validation
+        type: choice
+        options: ['21', '25']
+        default: '21'
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-${{ github.workflow }}-${{ github.ref }}
+  group: android-${{ github.workflow }}-${{ github.ref }}-${{ inputs.java_version || '21' }}
   cancel-in-progress: true
 
 jobs:
   validate:
+    name: Validate (JDK ${{ inputs.java_version || '21' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -24,7 +32,7 @@ jobs:
       - uses: actions/setup-java@v6.0.1
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: ${{ inputs.java_version || '21' }}
       - uses: gradle/actions/setup-gradle@v6.3.0
       - name: Build, Test, and Lint
         run: bash ./gradlew assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --no-daemon
